@@ -6,8 +6,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"log"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -17,55 +15,47 @@ import (
 
 type Result struct {
 	Name     string
-	filePath string
+	FilePath string
 }
 
-var (
-	Interface Result
-	Recv      Result
-)
-
-func RunForRecv() {
-	wd, err := os.Getwd()
+func DetectReciever(srcPath string) (*Result, error) {
+	fileNames, err := findFilesWithWalkDir(srcPath)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	fileNames, err := findFilesWithWalkDir(wd)
-	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	i, err := fuzzyfinder.Find(
 		fileNames,
 		func(i int) string {
-			return strings.ReplaceAll(fileNames[i], wd, "")
+			return strings.ReplaceAll(fileNames[i], srcPath, "")
 		},
 	)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
+	fileName := fileNames[i]
 
-	its, err := getStructTypes(fileNames[i])
+	// 現状レシーバーの選択対象は構造体のみ
+	sts, err := getStructTypes(fileName)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	i, err = fuzzyfinder.Find(
-		its,
+		sts,
 		func(i int) string {
-			return its[i].Name.String()
+			return sts[i].Name.String()
 		},
 		fuzzyfinder.WithPreviewWindow(func(i, w, h int) string {
 			if i == -1 {
 				return ""
 			}
 
-			it, ok := its[i].Type.(*ast.StructType)
+			it, ok := sts[i].Type.(*ast.StructType)
 			if !ok {
 				return ""
 			}
 
-			str := fmt.Sprintf("type %s struct {\n", its[i].Name.String())
+			str := fmt.Sprintf("type %s struct {\n", sts[i].Name.String())
 			for _, field := range it.Fields.List {
 				comment := field.Comment.Text()
 				if comment != "" {
@@ -79,39 +69,34 @@ func RunForRecv() {
 		}),
 	)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	Recv = Result{
-		Name:     its[i].Name.String(),
-		filePath: fileNames[i],
-	}
+	return &Result{
+		Name:     sts[i].Name.String(),
+		FilePath: fileName,
+	}, nil
 }
 
-func RunForInterface() {
-	wd, err := os.Getwd()
+func DetectInterface(srcPath string) (*Result, error) {
+	fileNames, err := findFilesWithWalkDir(srcPath)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	fileNames, err := findFilesWithWalkDir(wd)
-	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	i, err := fuzzyfinder.Find(
 		fileNames,
 		func(i int) string {
-			return strings.ReplaceAll(fileNames[i], wd, "")
+			return strings.ReplaceAll(fileNames[i], srcPath, "")
 		},
 	)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	its, err := getInterfaceTypes(fileNames[i])
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	i, err = fuzzyfinder.Find(
 		its,
@@ -157,13 +142,13 @@ func RunForInterface() {
 		}),
 	)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	Interface = Result{
+	return &Result{
 		Name:     its[i].Name.String(),
-		filePath: fileNames[i],
-	}
+		FilePath: fileNames[i],
+	}, nil
 }
 
 func prettyMethodParam(f *ast.Field) string {
@@ -206,7 +191,7 @@ func getInterfaceTypes(filename string) ([]*ast.TypeSpec, error) {
 
 	astf, err := parser.ParseFile(fset, filename, nil, 0)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	genInterfaces := make([]*ast.TypeSpec, 0)
@@ -247,7 +232,7 @@ func getStructTypes(filename string) ([]*ast.TypeSpec, error) {
 
 	astf, err := parser.ParseFile(fset, filename, nil, 0)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	genInterfaces := make([]*ast.TypeSpec, 0)

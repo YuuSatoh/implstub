@@ -8,6 +8,8 @@ import (
 	"go/types"
 	"html/template"
 	"implstub/detect"
+	"io"
+	"log"
 	"os"
 	"strings"
 
@@ -16,11 +18,36 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
+type alreadyDecl struct {
+	recvName string
+	methods  map[string]struct{}
+}
+
+// methodSig represents a methodSig signature.
+type methodSig struct {
+	Recv string
+	funcSig
+}
+
+// funcSig represents a function signature.
+type funcSig struct {
+	Name     string
+	Params   string
+	Res      string
+	Comments string
+}
+
+// paramSig represents a parameter in a function or method signature.
+type paramSig struct {
+	Name string
+	Type string
+}
+
 const doc = "implstub is ..."
 
 // ImplStubAnalyzer is ...
 var ImplStubAnalyzer = &analysis.Analyzer{
-	Name: "findInterface",
+	Name: "implstub",
 	Doc:  doc,
 	Run:  run,
 	Requires: []*analysis.Analyzer{
@@ -29,200 +56,12 @@ var ImplStubAnalyzer = &analysis.Analyzer{
 }
 
 var (
-	interf string
-	recv   string
+	output            string
+	overWrite         bool
+	pointerReciever   bool
+	detectedInterface *detect.Result
+	detectedRecv      *detect.Result
 )
-
-func init() {
-	ImplStubAnalyzer.Flags.StringVar(&interf, "interf", interf, "name of the interface")
-	ImplStubAnalyzer.Flags.StringVar(&recv, "recv", recv, "name of the reciever")
-	detect.RunForRecv()
-	detect.RunForInterface()
-}
-
-// var (
-// 	recvOnce        sync.Once
-// 	interfaceOnce   sync.Once
-// 	recvObject      *types.TypeName
-// 	interfaceObject *types.TypeName
-// )
-
-func run(pass *analysis.Pass) (interface{}, error) {
-	// fmt.Println(pass.Pkg)
-
-	// recvObjects := pass.ResultOf[FindRecvAnalyzer].([]*types.TypeName)
-	// if len(recvObjects) == 0 {
-	// 	return nil, nil
-	// }
-
-	// var (
-	// 	err error
-	// 	i   int
-	// )
-	// recvOnce.Do(func() {
-	// 	i, err = fuzzyfinder.Find(
-	// 		recvObjects,
-	// 		func(i int) string {
-	// 			return fmt.Sprintf("%s.%s", recvObjects[i].Pkg().Path(), recvObjects[i].Name())
-	// 		},
-	// 	)
-	// 	recvObject = recvObjects[i]
-	// })
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// interfaceObjects := pass.ResultOf[FindInterfaceAnalyzer].([]*types.TypeName)
-	// if len(interfaceObjects) == 0 {
-	// 	return nil, nil
-	// }
-
-	// interfaceOnce.Do(func() {
-	// 	i, err = fuzzyfinder.Find(
-	// 		interfaceObjects,
-	// 		func(i int) string {
-	// 			return fmt.Sprintf("%s.%s", interfaceObjects[i].Pkg().Path(), interfaceObjects[i].Name())
-	// 		},
-	// 	)
-	// 	interfaceObject = interfaceObjects[i]
-	// })
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// objectType := interfaceObject.Type()
-	// if objectType == nil {
-	// 	return nil, nil
-	// }
-
-	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-	nodeFilter := []ast.Node{
-		(*ast.FuncDecl)(nil),
-	}
-
-	recvName := strings.ToLower(string(recvObject.Name()[0]))
-
-	var implementedMethods []implementedMethod
-	inspect.Preorder(nodeFilter, func(n ast.Node) {
-		nType, ok := n.(*ast.FuncDecl)
-		if !ok {
-			return
-		}
-
-		if nType.Recv != nil {
-			for _, r := range nType.Recv.List {
-				// FIXME: type特定してちゃんと名前取得したほうがきれいかも
-				if recvObject.Name() == fmt.Sprint(r.Type) {
-					// レシーバが存在する場合はレシーバ名を合わせる
-					if len(r.Names) > 0 {
-						recvName = r.Names[0].String()
-					}
-
-					// 指定されたレシーバオブジェクトにメソッドが存在する場合は引数と返り値を一旦保存する
-					// 指定されたinterfaceを満たすためのメソッドが既に実装されていれば出力をスキップすることになる
-					var params []string
-					for _, v := range nType.Type.Params.List {
-						name := "_"
-						if len(v.Names) != 0 {
-							name = v.Names[0].String()
-						}
-
-						if se, ok := v.Type.(*ast.SelectorExpr); ok {
-							params = append(params, fmt.Sprintf("%s %s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
-						} else {
-							params = append(params, fmt.Sprintf("%s %s", name, v.Type))
-						}
-					}
-
-					var results []string
-					for _, v := range nType.Type.Results.List {
-						name := ""
-						if len(v.Names) != 0 {
-							name = v.Names[0].String() + " "
-						}
-
-						if se, ok := v.Type.(*ast.SelectorExpr); ok {
-							results = append(results, fmt.Sprintf("%s%s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
-						} else {
-							results = append(results, fmt.Sprintf("%s%s", name, v.Type))
-						}
-					}
-
-					implementedMethods = append(implementedMethods, implementedMethod{
-						name:    nType.Name.String(),
-						params:  fmt.Sprintf("(%s)", strings.Join(params, ", ")),
-						results: fmt.Sprintf("(%s)", strings.Join(results, ", ")),
-					})
-				}
-			}
-		}
-	})
-
-	recvPkgPath := recvObject.Pkg().Path()
-	if typeI, ok := objectType.Underlying().(*types.Interface); ok {
-	implementLoop:
-		for i := 0; i < typeI.NumMethods(); i++ {
-			m := typeI.Method(i)
-			mSig := m.Type().Underlying().(*types.Signature)
-
-			funcName := m.Name()
-			funcParams := trimPackage(strings.ReplaceAll(mSig.Params().String(), recvPkgPath+".", ""))
-			funcResults := trimPackage(strings.ReplaceAll(mSig.Results().String(), recvPkgPath+".", ""))
-
-			for _, m := range implementedMethods {
-				// 実装済みのメソッドはスキップ
-				if m.name == funcName && m.params == funcParams && m.results == funcResults {
-					fmt.Printf("m.name: %v\n", m.name)
-					fmt.Printf("m.params: %v\n", m.params)
-					fmt.Printf("m.results: %v\n", m.results)
-					continue implementLoop
-				}
-			}
-
-			fmt.Println(string(genStubs(recvName+" *"+recvObject.Name(), []Func{
-				{
-					Name:     funcName,
-					Params:   funcParams,
-					Res:      funcResults,
-					Comments: "// hoge method\n",
-				},
-			}, nil)))
-		}
-	}
-
-	f, err := os.Create("./output.txt")
-	if err != nil {
-		return nil, err
-	}
-
-	// fmt.Fprint(f, string(src))
-
-	if err := f.Close(); err != nil {
-		return nil, err
-	}
-
-	return nil, nil
-}
-
-// Method represents a method signature.
-type Method struct {
-	Recv string
-	Func
-}
-
-// Func represents a function signature.
-type Func struct {
-	Name     string
-	Params   string
-	Res      string
-	Comments string
-}
-
-// Param represents a parameter in a function or method signature.
-type Param struct {
-	Name string
-	Type string
-}
 
 const stub = "{{if .Comments}}{{.Comments}}{{end}}" +
 	"func ({{.Recv}}) {{.Name}}" +
@@ -232,27 +71,143 @@ const stub = "{{if .Comments}}{{.Comments}}{{end}}" +
 
 var tmpl = template.Must(template.New("test").Parse(stub))
 
-// genStubs prints nicely formatted method stubs
-// for fns using receiver expression recv.
-// If recv is not a valid receiver expression,
-// genStubs will panic.
-// genStubs won't generate stubs for
-// already implemented methods of receiver.
-func genStubs(recv string, fns []Func, implemented map[string]bool) []byte {
-	var buf bytes.Buffer
-	for _, fn := range fns {
-		if implemented[fn.Name] {
+func init() {
+	ImplStubAnalyzer.Flags.StringVar(&output, "o", output, "specify the output file path")
+	ImplStubAnalyzer.Flags.BoolVar(&overWrite, "w", overWrite, "overwrite the specified receiver file")
+	ImplStubAnalyzer.Flags.BoolVar(&pointerReciever, "p", pointerReciever, "create a stub with the pointer receiver")
+
+	srcPath := strings.TrimSuffix(os.Args[len(os.Args)-1], "...")
+
+	var err error
+	detectedInterface, err = detect.DetectInterface(srcPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	detectedRecv, err = detect.DetectReciever(srcPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(pass *analysis.Pass) (interface{}, error) {
+	var (
+		targetInterface *types.Interface
+		targetRecv      *types.TypeName
+	)
+	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+
+	// 指定したInterfaceとRecieverと同名の宣言を探す
+	inspect.Preorder([]ast.Node{(*ast.GenDecl)(nil)}, func(n ast.Node) {
+		nGenDecl, ok := n.(*ast.GenDecl)
+		if !ok {
+			return
+		}
+
+		for _, spec := range nGenDecl.Specs {
+			t, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+
+			defType, ok := pass.TypesInfo.Defs[t.Name].(*types.TypeName)
+			if !ok {
+				continue
+			}
+
+			switch defT := defType.Type().Underlying().(type) {
+			case *types.Interface:
+				if defType.Name() == detectedInterface.Name {
+					targetInterface = defT
+				}
+			case *types.Struct:
+				if defType.Name() == detectedRecv.Name {
+					targetRecv = defType
+				}
+			}
+		}
+	})
+
+	fmt.Printf("targetInterface: %v\n", targetInterface)
+	fmt.Printf("targetRecv: %v\n", targetRecv)
+	// ターゲットが見つかるまでパッケージを走査する
+	if targetInterface == nil || targetRecv == nil {
+		return nil, nil
+	}
+
+	// ターゲットが見つかったらスタブを書き出す
+	return write(inspect, targetInterface, targetRecv)
+}
+
+func write(inspect *inspector.Inspector, targetInterface *types.Interface, targetRecv *types.TypeName) (interface{}, error) {
+	var (
+		f   io.WriteCloser = os.Stdout
+		err error
+	)
+	if overWrite {
+		f, err = os.OpenFile(detectedRecv.FilePath, os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+	} else if output != "" {
+		f, err = os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+	}
+
+	decl := getAlreadyDecl(inspect, targetRecv)
+	recvPkgPath := targetRecv.Pkg().Path()
+
+	// スタブメソッドを書き出す
+	for i := 0; i < targetInterface.NumMethods(); i++ {
+		m := targetInterface.Method(i)
+
+		mSig := m.Type().Underlying().(*types.Signature)
+
+		funcName := m.Name()
+		funcParams := trimPackage(strings.ReplaceAll(mSig.Params().String(), recvPkgPath+".", ""))
+		funcResults := trimPackage(strings.ReplaceAll(mSig.Results().String(), recvPkgPath+".", ""))
+
+		// 実装済みのメソッドはスキップ
+		if _, ok := decl.methods[decl.methodKey(funcName, funcParams, funcResults)]; ok {
+			fmt.Println("skip already defined: " + decl.methodKey(funcName, funcParams, funcResults))
 			continue
 		}
-		meth := Method{Recv: recv, Func: fn}
+
+		stub, err := genStubs(decl.recvName+" *"+detectedRecv.Name, []funcSig{
+			{
+				Name:     funcName,
+				Params:   funcParams,
+				Res:      funcResults,
+				Comments: fmt.Sprintf("// %s comments...\n", funcName),
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		fmt.Fprintf(f, string(stub))
+	}
+
+	return nil, nil
+}
+
+// genStubs prints nicely formatted method stubs
+func genStubs(recv string, fns []funcSig) ([]byte, error) {
+	var buf bytes.Buffer
+	for _, fn := range fns {
+		meth := methodSig{Recv: recv, funcSig: fn}
 		tmpl.Execute(&buf, meth)
 	}
 
 	pretty, err := format.Source(buf.Bytes())
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return pretty
+
+	return pretty, nil
 }
 
 func trimPackage(str string) string {
@@ -272,8 +227,81 @@ func trimPackage(str string) string {
 	return strings.Join(result, " ")
 }
 
-type implementedMethod struct {
-	name    string
-	params  string
-	results string
+// getAlreadyDecl 対象のレシーバに既に実装されている情報を取得する
+func getAlreadyDecl(inspect *inspector.Inspector, targetRecv *types.TypeName) *alreadyDecl {
+	result := &alreadyDecl{
+		recvName: strings.ToLower(detectedRecv.Name),
+	}
+
+	inspect.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
+		nType, ok := n.(*ast.FuncDecl)
+		if !ok || nType.Recv == nil {
+			return
+		}
+
+		for _, r := range nType.Recv.List {
+			// 値レシーバーとポインターレシーバーそれぞれチェックする必要がある
+			switch t := r.Type.(type) {
+			case *ast.Ident:
+				if detectedRecv.Name != t.Name {
+					continue
+				}
+			case *ast.StarExpr:
+				if detectedRecv.Name != fmt.Sprint(t.X) {
+					continue
+				}
+			}
+
+			// 対象のオブジェクトに既にレシーバ名が宣言されている場合は合わせる
+			// 違う名前がついていることは考慮しない
+			if len(r.Names) > 0 {
+				result.recvName = r.Names[0].String()
+			}
+
+			// 指定されたレシーバにメソッドが存在する場合はメソッド名・引数・返り値を保存する
+			// 指定されたインターフェースを満たすためのメソッドが既に実装されていれば出力をスキップすることになる
+			var params []string
+			for _, v := range nType.Type.Params.List {
+				name := "_"
+				if len(v.Names) != 0 {
+					name = v.Names[0].String()
+				}
+
+				if se, ok := v.Type.(*ast.SelectorExpr); ok {
+					params = append(params, fmt.Sprintf("%s %s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
+				} else {
+					params = append(params, fmt.Sprintf("%s %s", name, v.Type))
+				}
+			}
+
+			var results []string
+			for _, v := range nType.Type.Results.List {
+				name := ""
+				if len(v.Names) != 0 {
+					name = v.Names[0].String() + " "
+				}
+
+				if se, ok := v.Type.(*ast.SelectorExpr); ok {
+					results = append(results, fmt.Sprintf("%s%s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
+				} else {
+					results = append(results, fmt.Sprintf("%s%s", name, v.Type))
+				}
+			}
+			result.appendMethod(nType.Name.String(), fmt.Sprintf("(%s)", strings.Join(params, ", ")), fmt.Sprintf("(%s)", strings.Join(results, ", ")))
+		}
+	})
+
+	return result
+}
+
+func (a *alreadyDecl) appendMethod(name, params, results string) {
+	if a == nil {
+		return
+	}
+
+	a.methods[a.methodKey(name, params, results)] = struct{}{}
+}
+
+func (a *alreadyDecl) methodKey(name, params, results string) string {
+	return fmt.Sprintf("%s(%s) (%s)", name, params, results)
 }
