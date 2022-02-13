@@ -2,20 +2,18 @@ package implstub
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/format"
 	"go/types"
 	"html/template"
-	"implstub/detect"
 	"io"
-	"log"
 	"os"
 	"strings"
 
-	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
+	"golang.org/x/tools/go/packages"
 )
 
 type alreadyDecl struct {
@@ -43,24 +41,9 @@ type paramSig struct {
 	Type string
 }
 
-const doc = "implstub is ..."
-
-// ImplStubAnalyzer is ...
-var ImplStubAnalyzer = &analysis.Analyzer{
-	Name: "implstub",
-	Doc:  doc,
-	Run:  run,
-	Requires: []*analysis.Analyzer{
-		inspect.Analyzer,
-	},
-}
-
 var (
-	output            string
-	overWrite         bool
-	pointerReciever   bool
-	detectedInterface *detect.Result
-	detectedRecv      *detect.Result
+	detectedInterface *Result
+	detectedRecv      *Result
 )
 
 const stub = "{{if .Comments}}{{.Comments}}{{end}}" +
@@ -71,94 +54,128 @@ const stub = "{{if .Comments}}{{.Comments}}{{end}}" +
 
 var tmpl = template.Must(template.New("test").Parse(stub))
 
-func init() {
-	ImplStubAnalyzer.Flags.StringVar(&output, "o", output, "specify the output file path")
-	ImplStubAnalyzer.Flags.BoolVar(&overWrite, "w", overWrite, "overwrite the specified receiver file")
-	ImplStubAnalyzer.Flags.BoolVar(&pointerReciever, "p", pointerReciever, "create a stub with the pointer receiver")
+const pkgPath = "command-line-arguments"
 
+func Exec(output *string, overwrite, pointerReciever bool) error {
 	srcPath := strings.TrimSuffix(os.Args[len(os.Args)-1], "...")
-
 	var err error
-	detectedInterface, err = detect.DetectInterface(srcPath)
+	detectedInterface, err = DetectInterface(srcPath)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	detectedRecv, err = detect.DetectReciever(srcPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-}
 
-func run(pass *analysis.Pass) (interface{}, error) {
+	detectedRecv, err = DetectReciever(srcPath)
+	if err != nil {
+		return err
+	}
+
+	config := &packages.Config{
+		Mode: packages.LoadAllSyntax,
+	}
+
+	interfacePkgs, err := packages.Load(config, detectedInterface.FilePath)
+	if err != nil {
+		return err
+	}
+	interfacePkg := interfacePkgs[0]
+
+	recvPkgs, err := packages.Load(config, detectedRecv.FilePath)
+	if err != nil {
+		return err
+	}
+	recvPkg := recvPkgs[0]
+
 	var (
 		targetInterface *types.Interface
 		targetRecv      *types.TypeName
 	)
-	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
-	// 指定したInterfaceとRecieverと同名の宣言を探す
-	inspect.Preorder([]ast.Node{(*ast.GenDecl)(nil)}, func(n ast.Node) {
-		nGenDecl, ok := n.(*ast.GenDecl)
-		if !ok {
-			return
-		}
-
-		for _, spec := range nGenDecl.Specs {
-			t, ok := spec.(*ast.TypeSpec)
+	for _, syntax := range interfacePkg.Syntax {
+		ast.Inspect(syntax, func(node ast.Node) bool {
+			nGenDecl, ok := node.(*ast.GenDecl)
 			if !ok {
-				continue
+				return true
 			}
 
-			defType, ok := pass.TypesInfo.Defs[t.Name].(*types.TypeName)
-			if !ok {
-				continue
-			}
+			for _, spec := range nGenDecl.Specs {
+				t, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
 
-			switch defT := defType.Type().Underlying().(type) {
-			case *types.Interface:
-				if defType.Name() == detectedInterface.Name {
+				defType, ok := interfacePkg.TypesInfo.Defs[t.Name].(*types.TypeName)
+				if !ok {
+					continue
+				}
+
+				if defT, ok := defType.Type().Underlying().(*types.Interface); ok && defType.Name() == detectedInterface.Name {
 					targetInterface = defT
-				}
-			case *types.Struct:
-				if defType.Name() == detectedRecv.Name {
-					targetRecv = defType
+					return false
 				}
 			}
-		}
-	})
 
-	fmt.Printf("targetInterface: %v\n", targetInterface)
-	fmt.Printf("targetRecv: %v\n", targetRecv)
-	// ターゲットが見つかるまでパッケージを走査する
-	if targetInterface == nil || targetRecv == nil {
-		return nil, nil
+			return true
+		})
+	}
+
+	var decl *alreadyDecl
+	for _, syntax := range recvPkg.Syntax {
+		ast.Inspect(syntax, func(node ast.Node) bool {
+			nGenDecl, ok := node.(*ast.GenDecl)
+			if !ok {
+				return true
+			}
+
+			for _, spec := range nGenDecl.Specs {
+				t, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+
+				defType, ok := recvPkg.TypesInfo.Defs[t.Name].(*types.TypeName)
+				if !ok {
+					continue
+				}
+
+				if _, ok := defType.Type().Underlying().(*types.Struct); ok && defType.Name() == detectedRecv.Name {
+					targetRecv = defType
+
+					decl = getAlreadyDecl(inspector.New(recvPkg.Syntax), targetRecv)
+					return false
+				}
+			}
+
+			return true
+		})
+	}
+
+	// ターゲットが見つからないケースはないはずだが一応エラーにしておく
+	if targetInterface == nil || targetRecv == nil || decl == nil {
+		return errors.New("not found target")
 	}
 
 	// ターゲットが見つかったらスタブを書き出す
-	return write(inspect, targetInterface, targetRecv)
+	return write(targetInterface, targetRecv, decl, output, overwrite, pointerReciever)
 }
 
-func write(inspect *inspector.Inspector, targetInterface *types.Interface, targetRecv *types.TypeName) (interface{}, error) {
+func write(targetInterface *types.Interface, targetRecv *types.TypeName, decl *alreadyDecl, output *string, overwrite, pointerReciever bool) error {
 	var (
 		f   io.WriteCloser = os.Stdout
 		err error
 	)
-	if overWrite {
+	if overwrite {
 		f, err = os.OpenFile(detectedRecv.FilePath, os.O_WRONLY|os.O_APPEND, 0666)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer f.Close()
-	} else if output != "" {
-		f, err = os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+	} else if output != nil {
+		f, err = os.OpenFile(*output, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer f.Close()
 	}
-
-	decl := getAlreadyDecl(inspect, targetRecv)
-	recvPkgPath := targetRecv.Pkg().Path()
 
 	// スタブメソッドを書き出す
 	for i := 0; i < targetInterface.NumMethods(); i++ {
@@ -167,8 +184,8 @@ func write(inspect *inspector.Inspector, targetInterface *types.Interface, targe
 		mSig := m.Type().Underlying().(*types.Signature)
 
 		funcName := m.Name()
-		funcParams := trimPackage(strings.ReplaceAll(mSig.Params().String(), recvPkgPath+".", ""))
-		funcResults := trimPackage(strings.ReplaceAll(mSig.Results().String(), recvPkgPath+".", ""))
+		funcParams := ArrangePackagePath(detectedRecv.FilePath, detectedInterface.FilePath, mSig.Params().String())
+		funcResults := ArrangePackagePath(detectedRecv.FilePath, detectedInterface.FilePath, mSig.Results().String())
 
 		// 実装済みのメソッドはスキップ
 		if _, ok := decl.methods[decl.methodKey(funcName, funcParams, funcResults)]; ok {
@@ -176,7 +193,12 @@ func write(inspect *inspector.Inspector, targetInterface *types.Interface, targe
 			continue
 		}
 
-		stub, err := genStubs(decl.recvName+" *"+detectedRecv.Name, []funcSig{
+		pointer := ""
+		if pointerReciever {
+			pointer = "*"
+		}
+
+		stub, err := genStubs(fmt.Sprintf("%s %s%s", decl.recvName, pointer, detectedRecv.Name), []funcSig{
 			{
 				Name:     funcName,
 				Params:   funcParams,
@@ -185,13 +207,13 @@ func write(inspect *inspector.Inspector, targetInterface *types.Interface, targe
 			},
 		})
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("failed to generate stub, funcName: %s, funcParams: %s, funcResults: %s, err: %w", funcName, funcParams, funcResults, err)
 		}
 
 		fmt.Fprintf(f, string(stub))
 	}
 
-	return nil, nil
+	return nil
 }
 
 // genStubs prints nicely formatted method stubs
@@ -210,13 +232,37 @@ func genStubs(recv string, fns []funcSig) ([]byte, error) {
 	return pretty, nil
 }
 
+// ArrangePackagePath 配置先のファイルパッケージに合わせてパラメーターのパッケージ指定を調整する
+func ArrangePackagePath(dstFilePath, srcFilePath, srcParams string) string {
+	// ファイル名まで指定されているので取り除く
+	dstFilePath = trimFileName(dstFilePath)
+	srcFilePath = trimFileName(srcFilePath)
+
+	fmt.Printf("dstFilePath: %v\n", dstFilePath)
+	fmt.Printf("srcFilePath: %v\n", srcFilePath)
+	fmt.Printf("srcParams: %v\n", srcParams)
+	// packages.Loadが内部でgo listを使用しておりgoのファイルを指定するとpackage.pathがcommand-line-argumentsとなる
+	// 扱いづらいのでgo listで指定したファイルのパッケージパスに置き換える
+	params := strings.ReplaceAll(srcParams, pkgPath, srcFilePath)
+	fmt.Printf("srcParams: %v\n", params)
+	// 配置先のパッケージが含まれている場合は指定不要なので取り除く
+	params = strings.ReplaceAll(params, dstFilePath+".", "")
+	fmt.Printf("srcParams: %v\n", params)
+	// implstub/src/a.ADB のようにパッケージパスを含んだ形式になっているため一律取り除く
+	fmt.Printf("srcParams: %v\n", trimPackage(params))
+	return trimPackage(params)
+}
+
 func trimPackage(str string) string {
-	// (adb implstub/testdata/src/a.DB, db implstub/src/b.DB)
+	str = strings.ReplaceAll(str, "(", "")
+	str = strings.ReplaceAll(str, ")", "")
+
+	// adb implstub/testdata/src/a.DB, db implstub/src/b.DB
 	whiteSpaceSplitStr := strings.Split(str, " ")
 
 	result := make([]string, 0, len(whiteSpaceSplitStr))
 	for _, splitStr := range whiteSpaceSplitStr {
-		// implstub/testdata/src/a.DB,
+		// [ implstub, testdata, src, a.DB]
 		slashSplitStr := strings.Split(splitStr, "/")
 
 		// a.DB,
@@ -224,13 +270,29 @@ func trimPackage(str string) string {
 	}
 
 	// (adb a.DB, db b.DB)
-	return strings.Join(result, " ")
+	return fmt.Sprintf("(%s)", strings.Join(result, " "))
+}
+
+func trimFileName(str string) string {
+	// implstub/testdata/src/a.DB
+	// [ implstub, testdata, src, a.DB ]
+	slashSplitStr := strings.Split(str, "/")
+	if len(slashSplitStr) < 2 {
+		return str
+	}
+
+	// [ implstub, testdata, src]
+	removedFileName := slashSplitStr[:len(slashSplitStr)-1]
+
+	// implstub/testdata/src
+	return strings.Join(removedFileName, "/")
 }
 
 // getAlreadyDecl 対象のレシーバに既に実装されている情報を取得する
 func getAlreadyDecl(inspect *inspector.Inspector, targetRecv *types.TypeName) *alreadyDecl {
 	result := &alreadyDecl{
 		recvName: strings.ToLower(detectedRecv.Name),
+		methods:  make(map[string]struct{}),
 	}
 
 	inspect.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
@@ -262,6 +324,7 @@ func getAlreadyDecl(inspect *inspector.Inspector, targetRecv *types.TypeName) *a
 			// 指定されたインターフェースを満たすためのメソッドが既に実装されていれば出力をスキップすることになる
 			var params []string
 			for _, v := range nType.Type.Params.List {
+				// ここらへん怪しい
 				name := "_"
 				if len(v.Names) != 0 {
 					name = v.Names[0].String()
