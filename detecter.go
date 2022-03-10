@@ -29,7 +29,7 @@ func DetectReciever(srcPath string) (*Result, error) {
 		i, err := fuzzyfinder.Find(
 			fileNames,
 			func(i int) string {
-				return strings.ReplaceAll(fileNames[i], srcPath, "")
+				return fileNames[i]
 			},
 		)
 		if err != nil {
@@ -93,7 +93,7 @@ func DetectInterface(srcPath string) (*Result, error) {
 		i, err := fuzzyfinder.Find(
 			fileNames,
 			func(i int) string {
-				return strings.ReplaceAll(fileNames[i], srcPath, "")
+				return fileNames[i]
 			},
 		)
 		if err != nil {
@@ -288,7 +288,7 @@ func findFilesWithWalkDir(root string) ([]string, error) {
 			return errors.Wrap(err, "failed filepath.WalkDir")
 		}
 
-		if info.IsDir() {
+		if info.IsDir() || (strings.HasPrefix(path, ".") && !strings.HasPrefix(path, "./")) {
 			return nil
 		}
 
