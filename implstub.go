@@ -317,33 +317,38 @@ func getAlreadyDecl(inspect *inspector.Inspector, targetRecv *types.TypeName) *a
 			// 指定されたレシーバにメソッドが存在する場合はメソッド名・引数・返り値を保存する
 			// 指定されたインターフェースを満たすためのメソッドが既に実装されていれば出力をスキップすることになる
 			var params []string
-			for _, v := range nType.Type.Params.List {
-				// ここらへん怪しい
-				name := "_"
-				if len(v.Names) != 0 {
-					name = v.Names[0].String()
-				}
+			if nType.Type.Params != nil {
+				for _, v := range nType.Type.Params.List {
+					// ここらへん怪しい
+					name := "_"
+					if len(v.Names) != 0 {
+						name = v.Names[0].String()
+					}
 
-				if se, ok := v.Type.(*ast.SelectorExpr); ok {
-					params = append(params, fmt.Sprintf("%s %s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
-				} else {
-					params = append(params, fmt.Sprintf("%s %s", name, v.Type))
+					if se, ok := v.Type.(*ast.SelectorExpr); ok {
+						params = append(params, fmt.Sprintf("%s %s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
+					} else {
+						params = append(params, fmt.Sprintf("%s %s", name, v.Type))
+					}
 				}
 			}
 
 			var results []string
-			for _, v := range nType.Type.Results.List {
-				name := ""
-				if len(v.Names) != 0 {
-					name = v.Names[0].String() + " "
-				}
+			if nType.Type.Results != nil {
+				for _, v := range nType.Type.Results.List {
+					name := ""
+					if len(v.Names) != 0 {
+						name = v.Names[0].String() + " "
+					}
 
-				if se, ok := v.Type.(*ast.SelectorExpr); ok {
-					results = append(results, fmt.Sprintf("%s%s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
-				} else {
-					results = append(results, fmt.Sprintf("%s%s", name, v.Type))
+					if se, ok := v.Type.(*ast.SelectorExpr); ok {
+						results = append(results, fmt.Sprintf("%s%s.%s", name, se.X.(*ast.Ident).Name, se.Sel.Name))
+					} else {
+						results = append(results, fmt.Sprintf("%s%s", name, v.Type))
+					}
 				}
 			}
+
 			result.appendMethod(nType.Name.String(), fmt.Sprintf("(%s)", strings.Join(params, ", ")), fmt.Sprintf("(%s)", strings.Join(results, ", ")))
 		}
 	})

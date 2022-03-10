@@ -135,13 +135,17 @@ func DetectInterface(srcPath string) (*Result, error) {
 				}
 
 				var params []string
-				for _, p := range ft.Params.List {
-					params = append(params, prettyMethodParam(p))
+				if ft.Params != nil {
+					for _, p := range ft.Params.List {
+						params = append(params, prettyMethodParam(p))
+					}
 				}
 
 				var results []string
-				for _, r := range ft.Results.List {
-					results = append(results, prettyMethodResult(r))
+				if ft.Results != nil {
+					for _, r := range ft.Results.List {
+						results = append(results, prettyMethodResult(r))
+					}
 				}
 
 				str += fmt.Sprintf("%s(%s) (%s)\n", field.Names[0], strings.Join(params, ", "), strings.Join(results, ", ")) + "\n"
