@@ -1,13 +1,19 @@
 # implstub
+Selecting interface and struct will result in a temporary implementation.
 
-
+## install
+### Go version < 1.16
 ```sh
 $ go get github.com/YuuSatoh/implstub
 ```
 
+### Go 1.16+
+```sh
+$ go install github.com/YuuSatoh/implstub/cmd/implstub@latest
+```
 
-implstub - Selecting interface and struct will result in a temporary implementation.
 
+## How to use
 ```
 USAGE:
    implstub [global options] command [command options] [arguments...]
