@@ -238,18 +238,12 @@ func ArrangePackagePath(dstFilePath, srcFilePath, srcParams string) string {
 	dstFilePath = trimFileName(dstFilePath)
 	srcFilePath = trimFileName(srcFilePath)
 
-	fmt.Printf("dstFilePath: %v\n", dstFilePath)
-	fmt.Printf("srcFilePath: %v\n", srcFilePath)
-	fmt.Printf("srcParams: %v\n", srcParams)
 	// packages.Loadが内部でgo listを使用しておりgoのファイルを指定するとpackage.pathがcommand-line-argumentsとなる
 	// 扱いづらいのでgo listで指定したファイルのパッケージパスに置き換える
 	params := strings.ReplaceAll(srcParams, pkgPath, srcFilePath)
-	fmt.Printf("srcParams: %v\n", params)
 	// 配置先のパッケージが含まれている場合は指定不要なので取り除く
 	params = strings.ReplaceAll(params, dstFilePath+".", "")
-	fmt.Printf("srcParams: %v\n", params)
 	// implstub/src/a.ADB のようにパッケージパスを含んだ形式になっているため一律取り除く
-	fmt.Printf("srcParams: %v\n", trimPackage(params))
 	return trimPackage(params)
 }
 
