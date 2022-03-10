@@ -251,16 +251,19 @@ func trimPackage(str string) string {
 	str = strings.ReplaceAll(str, "(", "")
 	str = strings.ReplaceAll(str, ")", "")
 
-	// adb implstub/testdata/src/a.DB, db implstub/src/b.DB
+	// adb implstub/testdata/src/a.DB, db *implstub/src/b.DB
 	whiteSpaceSplitStr := strings.Split(str, " ")
 
 	result := make([]string, 0, len(whiteSpaceSplitStr))
 	for _, splitStr := range whiteSpaceSplitStr {
 		// [ implstub, testdata, src, a.DB]
 		slashSplitStr := strings.Split(splitStr, "/")
-
 		// a.DB,
-		result = append(result, slashSplitStr[len(slashSplitStr)-1])
+		pkgRemovedStr := slashSplitStr[len(slashSplitStr)-1]
+		if strings.HasPrefix(splitStr, "*") {
+			pkgRemovedStr = "*" + pkgRemovedStr
+		}
+		result = append(result, pkgRemovedStr)
 	}
 
 	// (adb a.DB, db b.DB)

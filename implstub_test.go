@@ -81,6 +81,15 @@ func TestArrangePackagePath(t *testing.T) {
 			want: "(adb a.DB, db repo.DB)",
 		},
 		{
+			name: "ポインターが指定されている場合ポインターのまま出力される",
+			args: args{
+				dstFilePath: "test/model/a.go",
+				srcFilePath: "test/repo/a.go",
+				srcParams:   "(adb *implstub/test/a.DB, db *command-line-arguments.DB)",
+			},
+			want: "(adb *a.DB, db *repo.DB)",
+		},
+		{
 			name: "配置先のdstFilePathがパラメーターで指定されている場合取り除かれる",
 			args: args{
 				dstFilePath: "test/model/a.go",
