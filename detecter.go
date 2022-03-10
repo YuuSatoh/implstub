@@ -24,23 +24,27 @@ func DetectReciever(srcPath string) (*Result, error) {
 		return nil, err
 	}
 
-	i, err := fuzzyfinder.Find(
-		fileNames,
-		func(i int) string {
-			return strings.ReplaceAll(fileNames[i], srcPath, "")
-		},
-	)
-	if err != nil {
-		return nil, err
+	fileName := fileNames[0]
+	if len(fileNames) > 1 {
+		i, err := fuzzyfinder.Find(
+			fileNames,
+			func(i int) string {
+				return strings.ReplaceAll(fileNames[i], srcPath, "")
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		fileName = fileNames[i]
 	}
-	fileName := fileNames[i]
 
 	// 現状レシーバーの選択対象は構造体のみ
 	sts, err := getStructTypes(fileName)
 	if err != nil {
 		return nil, err
 	}
-	i, err = fuzzyfinder.Find(
+	i, err := fuzzyfinder.Find(
 		sts,
 		func(i int) string {
 			return sts[i].Name.String()
@@ -84,22 +88,26 @@ func DetectInterface(srcPath string) (*Result, error) {
 		return nil, err
 	}
 
-	i, err := fuzzyfinder.Find(
-		fileNames,
-		func(i int) string {
-			return strings.ReplaceAll(fileNames[i], srcPath, "")
-		},
-	)
-	if err != nil {
-		return nil, err
+	fileName := fileNames[0]
+	if len(fileNames) > 1 {
+		i, err := fuzzyfinder.Find(
+			fileNames,
+			func(i int) string {
+				return strings.ReplaceAll(fileNames[i], srcPath, "")
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		fileName = fileNames[i]
 	}
-	fileName := fileNames[i]
 
 	its, err := getInterfaceTypes(fileName)
 	if err != nil {
 		return nil, err
 	}
-	i, err = fuzzyfinder.Find(
+	i, err := fuzzyfinder.Find(
 		its,
 		func(i int) string {
 			return its[i].Name.String()
