@@ -1,10 +1,10 @@
 package main
 
 import (
-	"implstub"
 	"log"
 	"os"
 
+	"github.com/YuuSatoh/implstub"
 	"github.com/urfave/cli/v2"
 )
 

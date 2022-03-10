@@ -1,8 +1,9 @@
 package implstub_test
 
 import (
-	"implstub"
 	"testing"
+
+	"github.com/YuuSatoh/implstub"
 )
 
 // TestAnalyzer is a test for Analyzer.
